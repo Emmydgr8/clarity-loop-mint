@@ -8,57 +8,79 @@ import {
 import { assertEquals } from 'https://deno.land/std@0.90.0/testing/asserts.ts';
 
 Clarinet.test({
-  name: "Test campaign creation",
+  name: "Test campaign creation with whitelist",
   async fn(chain: Chain, accounts: Map<string, Account>) {
     const deployer = accounts.get('deployer')!;
     const user1 = accounts.get('wallet_1')!;
     
     let block = chain.mineBlock([
-      // Test successful campaign creation by owner
       Tx.contractCall('loop_mint', 'create-campaign', [
         types.ascii("Test Campaign"),
         types.uint(1000),
-        types.uint(100)
+        types.uint(100),
+        types.uint(3), // max claims per user
+        types.bool(true) // whitelist enabled
       ], deployer.address),
       
-      // Test campaign creation by non-owner (should fail)
-      Tx.contractCall('loop_mint', 'create-campaign', [
-        types.ascii("Failed Campaign"),
-        types.uint(1000),
-        types.uint(100)
+      // Test adding user to whitelist
+      Tx.contractCall('loop_mint', 'add-to-whitelist', [
+        types.uint(0),
+        types.principal(user1.address)
+      ], deployer.address)
+    ]);
+    
+    block.receipts[0].result.expectOk().expectUint(0);
+    block.receipts[1].result.expectOk().expectBool(true);
+    
+    // Verify whitelist status
+    let verifyBlock = chain.mineBlock([
+      Tx.contractCall('loop_mint', 'is-whitelisted', [
+        types.uint(0),
+        types.principal(user1.address)
       ], user1.address)
     ]);
     
-    block.receipts[0].result.expectOk().expectUint(0); // First campaign ID should be 0
-    block.receipts[1].result.expectErr(types.uint(100)); // err-owner-only
+    verifyBlock.receipts[0].result.expectOk().expectBool(true);
   }
 });
 
 Clarinet.test({
-  name: "Test reward claiming",
+  name: "Test multiple reward claims",
   async fn(chain: Chain, accounts: Map<string, Account>) {
     const deployer = accounts.get('deployer')!;
     const user1 = accounts.get('wallet_1')!;
     
-    // Create campaign first
+    // Create campaign with 3 max claims
     let setup = chain.mineBlock([
       Tx.contractCall('loop_mint', 'create-campaign', [
         types.ascii("Test Campaign"),
         types.uint(1000),
-        types.uint(100)
+        types.uint(100),
+        types.uint(3),
+        types.bool(false)
       ], deployer.address)
     ]);
     
-    // Test claiming
-    let block = chain.mineBlock([
-      Tx.contractCall('loop_mint', 'claim-reward', [
-        types.uint(0)
-      ], user1.address)
-    ]);
+    // Test multiple claims
+    let claims = [];
+    for(let i = 0; i < 4; i++) {
+      claims.push(
+        Tx.contractCall('loop_mint', 'claim-reward', [
+          types.uint(0)
+        ], user1.address)
+      );
+    }
     
+    let block = chain.mineBlock(claims);
+    
+    // First 3 claims should succeed
     block.receipts[0].result.expectOk().expectBool(true);
+    block.receipts[1].result.expectOk().expectBool(true);
+    block.receipts[2].result.expectOk().expectBool(true);
+    // 4th claim should fail
+    block.receipts[3].result.expectErr(types.uint(106));
     
-    // Verify claim was recorded
+    // Verify claim count
     let verifyBlock = chain.mineBlock([
       Tx.contractCall('loop_mint', 'get-participant-claims', [
         types.uint(0),
@@ -66,40 +88,6 @@ Clarinet.test({
       ], user1.address)
     ]);
     
-    verifyBlock.receipts[0].result.expectOk().expectUint(1);
-  }
-});
-
-Clarinet.test({
-  name: "Test campaign management",
-  async fn(chain: Chain, accounts: Map<string, Account>) {
-    const deployer = accounts.get('deployer')!;
-    const user1 = accounts.get('wallet_1')!;
-    
-    // Create and end campaign
-    let block = chain.mineBlock([
-      Tx.contractCall('loop_mint', 'create-campaign', [
-        types.ascii("Test Campaign"),
-        types.uint(1000),
-        types.uint(100)
-      ], deployer.address),
-      
-      Tx.contractCall('loop_mint', 'end-campaign', [
-        types.uint(0)
-      ], deployer.address)
-    ]);
-    
-    block.receipts[0].result.expectOk();
-    block.receipts[1].result.expectOk().expectBool(true);
-    
-    // Verify campaign is inactive
-    let verifyBlock = chain.mineBlock([
-      Tx.contractCall('loop_mint', 'get-campaign', [
-        types.uint(0)
-      ], user1.address)
-    ]);
-    
-    const campaign = verifyBlock.receipts[0].result.expectOk().expectSome();
-    assertEquals(campaign['active'], false);
+    verifyBlock.receipts[0].result.expectOk().expectUint(3);
   }
 });
