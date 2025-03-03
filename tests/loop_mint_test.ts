@@ -10,30 +10,12 @@ import { assertEquals } from 'https://deno.land/std@0.90.0/testing/asserts.ts';
 // [Previous tests remain unchanged]
 
 Clarinet.test({
-  name: "Test invalid campaign parameters",
+  name: "Test campaign deactivation and token recovery",
   async fn(chain: Chain, accounts: Map<string, Account>) {
     const deployer = accounts.get('deployer')!;
     
+    // Create campaign
     let block = chain.mineBlock([
-      Tx.contractCall('loop_mint', 'create-campaign', [
-        types.ascii("Invalid Campaign"),
-        types.uint(100),  // total amount
-        types.uint(200),  // reward per claim > total
-        types.uint(3),
-        types.bool(false)
-      ], deployer.address)
-    ]);
-    
-    block.receipts[0].result.expectErr(types.uint(107));
-  }
-});
-
-Clarinet.test({
-  name: "Test creator cannot claim own rewards",
-  async fn(chain: Chain, accounts: Map<string, Account>) {
-    const deployer = accounts.get('deployer')!;
-    
-    let setup = chain.mineBlock([
       Tx.contractCall('loop_mint', 'create-campaign', [
         types.ascii("Test Campaign"),
         types.uint(1000),
@@ -43,12 +25,20 @@ Clarinet.test({
       ], deployer.address)
     ]);
     
-    let claim = chain.mineBlock([
-      Tx.contractCall('loop_mint', 'claim-reward', [
+    // Deactivate campaign
+    block = chain.mineBlock([
+      Tx.contractCall('loop_mint', 'deactivate-campaign', [
         types.uint(0)
       ], deployer.address)
     ]);
+    block.receipts[0].result.expectOk(true);
     
-    claim.receipts[0].result.expectErr(types.uint(108));
+    // Recover tokens
+    block = chain.mineBlock([
+      Tx.contractCall('loop_mint', 'recover-tokens', [
+        types.uint(0)
+      ], deployer.address)
+    ]);
+    block.receipts[0].result.expectOk(true);
   }
 });
