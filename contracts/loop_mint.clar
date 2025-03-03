@@ -11,6 +11,7 @@
 (define-constant err-max-claims-reached (err u106))
 (define-constant err-invalid-params (err u107))
 (define-constant err-creator-claim (err u108))
+(define-constant err-insufficient-tokens (err u109))
 
 ;; Data Variables
 (define-data-var total-campaigns uint u0)
@@ -31,7 +32,6 @@
 })
 
 (define-map participant-claims { campaign-id: uint, participant: principal } uint)
-
 (define-map campaign-whitelist { campaign-id: uint, participant: principal } bool)
 
 ;; Validate campaign parameters
@@ -40,7 +40,12 @@
         (> total-amount u0)
         (> reward-per-claim u0)
         (>= total-amount reward-per-claim)
-        (> max-claims u0)))
+        (> max-claims u0)
+        (<= (* reward-per-claim max-claims) total-amount)))
+
+;; Check token balance
+(define-private (check-token-balance (owner principal) (amount uint))
+    (>= (ft-get-balance reward-token owner) amount))
 
 ;; Create new campaign with whitelist and multi-claim support
 (define-public (create-campaign (name (string-ascii 64)) 
@@ -68,7 +73,23 @@
                 (ok campaign-id))
             err-owner-only)))
 
-;; [Previous whitelist functions remain unchanged]
+;; Deactivate campaign
+(define-public (deactivate-campaign (campaign-id uint))
+    (let ((campaign (unwrap! (map-get? campaigns campaign-id) err-not-found)))
+        (asserts! (is-eq tx-sender (get creator campaign)) err-owner-only)
+        (map-set campaigns campaign-id (merge campaign { active: false }))
+        (ok true)))
+
+;; Recover unused tokens
+(define-public (recover-tokens (campaign-id uint))
+    (let ((campaign (unwrap! (map-get? campaigns campaign-id) err-not-found)))
+        (asserts! (is-eq tx-sender (get creator campaign)) err-owner-only)
+        (asserts! (not (get active campaign)) err-inactive)
+        (try! (ft-transfer? reward-token 
+                          (get remaining-amount campaign) 
+                          contract-owner 
+                          (get creator campaign)))
+        (ok true)))
 
 ;; Claim reward with enhanced validation
 (define-public (claim-reward (campaign-id uint))
@@ -78,6 +99,7 @@
         (asserts! (not (is-eq tx-sender (get creator campaign))) err-creator-claim)
         (asserts! (get active campaign) err-inactive)
         (asserts! (>= (get remaining-amount campaign) (get reward-per-claim campaign)) err-insufficient-balance)
+        (asserts! (check-token-balance (get creator campaign) (get reward-per-claim campaign)) err-insufficient-tokens)
         (asserts! (is-eligible tx-sender campaign-id) err-not-eligible)
         (asserts! (< claims (get max-claims-per-user campaign)) err-max-claims-reached)
         
@@ -89,4 +111,4 @@
         (map-set participant-claims { campaign-id: campaign-id, participant: tx-sender } (+ claims u1))
         (ok true)))
 
-;; [Remaining functions unchanged]
+;; [Previous whitelist functions remain unchanged]
